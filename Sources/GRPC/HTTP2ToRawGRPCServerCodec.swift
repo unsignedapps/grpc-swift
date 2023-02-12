@@ -18,9 +18,9 @@ import NIOCore
 import NIOHPACK
 import NIOHTTP2
 
-internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServerResponseWriter {
-  typealias InboundIn = HTTP2Frame.FramePayload
-  typealias OutboundOut = HTTP2Frame.FramePayload
+public final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServerResponseWriter {
+  public typealias InboundIn = HTTP2Frame.FramePayload
+  public typealias OutboundOut = HTTP2Frame.FramePayload
 
   private var logger: Logger
   private var state: HTTP2ToRawGRPCStateMachine
@@ -67,7 +67,7 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     }
   }
 
-  init(
+  public init(
     servicesByName: [Substring: CallHandlerProvider],
     encoding: ServerMessageEncoding,
     errorDelegate: ServerErrorDelegate?,
@@ -84,16 +84,16 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     self.state = HTTP2ToRawGRPCStateMachine()
   }
 
-  internal func handlerAdded(context: ChannelHandlerContext) {
+  public func handlerAdded(context: ChannelHandlerContext) {
     self.context = context
   }
 
-  internal func handlerRemoved(context: ChannelHandlerContext) {
+  public func handlerRemoved(context: ChannelHandlerContext) {
     self.context = nil
     self.configurationState = .notConfigured
   }
 
-  internal func errorCaught(context: ChannelHandlerContext, error: Error) {
+  public func errorCaught(context: ChannelHandlerContext, error: Error) {
     switch self.configurationState {
     case .notConfigured:
       context.close(mode: .all, promise: nil)
@@ -102,7 +102,7 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     }
   }
 
-  internal func channelInactive(context: ChannelHandlerContext) {
+  public func channelInactive(context: ChannelHandlerContext) {
     if let handler = self.configurationState.tearDown() {
       handler.finish()
     } else {
@@ -110,7 +110,7 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     }
   }
 
-  internal func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+  public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
     self.isReading = true
     let payload = self.unwrapInboundIn(data)
 
@@ -177,7 +177,7 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     }
   }
 
-  internal func channelReadComplete(context: ChannelHandlerContext) {
+  public func channelReadComplete(context: ChannelHandlerContext) {
     self.isReading = false
 
     if self.flushPending {
@@ -278,7 +278,7 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     }
   }
 
-  internal func sendMetadata(
+  public func sendMetadata(
     _ headers: HPACKHeaders,
     flush: Bool,
     promise: EventLoopPromise<Void>?
@@ -296,7 +296,7 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     }
   }
 
-  internal func sendMessage(
+  public func sendMessage(
     _ buffer: ByteBuffer,
     metadata: MessageMetadata,
     promise: EventLoopPromise<Void>?
@@ -318,7 +318,7 @@ internal final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServe
     }
   }
 
-  internal func sendEnd(
+  public func sendEnd(
     status: GRPCStatus,
     trailers: HPACKHeaders,
     promise: EventLoopPromise<Void>?
