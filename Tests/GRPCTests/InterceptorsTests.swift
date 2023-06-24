@@ -158,9 +158,7 @@ class HelloWorldProvider: Helloworld_GreeterProvider {
   }
 }
 
-#if swift(>=5.6)
 extension HelloWorldClientInterceptorFactory: @unchecked Sendable {}
-#endif // swift(>=5.6)
 
 private class HelloWorldClientInterceptorFactory:
   Helloworld_GreeterClientInterceptorFactoryProtocol {
@@ -210,7 +208,7 @@ class NotReallyAuthServerInterceptor<Request: Message, Response: Message>:
   }
 }
 
-class HelloWorldServerInterceptorFactory: Helloworld_GreeterServerInterceptorFactoryProtocol {
+final class HelloWorldServerInterceptorFactory: Helloworld_GreeterServerInterceptorFactoryProtocol {
   func makeSayHelloInterceptors(
   ) -> [ServerInterceptor<Helloworld_HelloRequest, Helloworld_HelloReply>] {
     return [RemoteAddressExistsInterceptor(), NotReallyAuthServerInterceptor()]

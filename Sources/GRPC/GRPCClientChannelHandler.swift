@@ -226,7 +226,7 @@ extension _GRPCRequestHead {
 }
 
 /// The type of gRPC call.
-public enum GRPCCallType: Hashable, GRPCSendable {
+public enum GRPCCallType: Hashable, Sendable {
   /// Unary: a single request and a single response.
   case unary
 
@@ -270,10 +270,10 @@ public enum GRPCCallType: Hashable, GRPCSendable {
 /// This handler relies heavily on the `GRPCClientStateMachine` to manage the state of the request
 /// and response streams, which share a single HTTP/2 stream for transport.
 ///
-/// Typical usage of this handler is with a `HTTP2StreamMultiplexer` from SwiftNIO HTTP2:
+/// Typical usage of this handler is with a `NIOHTTP2Handler.StreamMultiplexer` from SwiftNIO HTTP2:
 ///
 /// ```
-/// let multiplexer: HTTP2StreamMultiplexer = // ...
+/// let multiplexer: NIOHTTP2Handler.StreamMultiplexer = // ...
 /// multiplexer.createStreamChannel(promise: nil) { (channel, streamID) in
 ///   let clientChannelHandler = GRPCClientChannelHandler<Request, Response>(
 ///     streamID: streamID,
@@ -374,8 +374,6 @@ extension GRPCClientChannelHandler: ChannelInboundHandler {
             return GRPCError.InvalidContentType(contentType).captureContext()
           case let .invalidHTTPStatus(status):
             return GRPCError.InvalidHTTPStatus(status).captureContext()
-          case let .invalidHTTPStatusWithGRPCStatus(status):
-            return GRPCError.InvalidHTTPStatusWithGRPCStatus(status).captureContext()
           case .invalidState:
             return GRPCError.InvalidState("parsing end-of-stream trailers").captureContext()
           }

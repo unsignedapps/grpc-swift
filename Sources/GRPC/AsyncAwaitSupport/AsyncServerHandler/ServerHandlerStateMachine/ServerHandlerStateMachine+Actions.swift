@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
 import NIOHPACK
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -71,12 +70,13 @@ extension ServerHandlerStateMachine {
 
     /// Update the metadata. It must not have been written yet.
     @inlinable
-    mutating func update(_ metadata: HPACKHeaders) {
+    mutating func update(_ metadata: HPACKHeaders) -> Bool {
       switch self {
       case .notWritten:
         self = .notWritten(metadata)
+        return true
       case .written:
-        assertionFailure("Metadata must not be set after it has been sent")
+        return false
       }
     }
 
@@ -94,4 +94,3 @@ extension ServerHandlerStateMachine {
     }
   }
 }
-#endif // compiler(>=5.6)

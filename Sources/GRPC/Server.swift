@@ -54,10 +54,6 @@ import Network
 ///    `GRPCServerPipelineConfigurator`. In the case of HTTP/2:
 ///
 ///                           ┌─────────────────────────────────┐
-///                           │      HTTP2StreamMultiplexer     │
-///                           └─▲─────────────────────────────┬─┘
-///                   HTTP2Frame│                             │HTTP2Frame
-///                           ┌─┴─────────────────────────────▼─┐
 ///                           │           HTTP2Handler          │
 ///                           └─▲─────────────────────────────┬─┘
 ///                   ByteBuffer│                             │ByteBuffer
@@ -67,7 +63,7 @@ import Network
 ///                   ByteBuffer│                             │ByteBuffer
 ///                             │                             ▼
 ///
-///    The `HTTP2StreamMultiplexer` provides one `Channel` for each HTTP/2 stream (and thus each
+///    The `NIOHTTP2Handler.StreamMultiplexer` provides one `Channel` for each HTTP/2 stream (and thus each
 ///    RPC).
 ///
 /// 3. The frames for each stream channel are routed by the `HTTP2ToRawGRPCServerCodec` handler to
@@ -144,7 +140,17 @@ public final class Server {
           let sync = channel.pipeline.syncOperations
           #if canImport(NIOSSL)
           if let sslContext = try sslContext?.get() {
-            try sync.addHandler(NIOSSLServerHandler(context: sslContext))
+            let sslHandler: NIOSSLServerHandler
+            if let verify = configuration.tlsConfiguration?.nioSSLCustomVerificationCallback {
+              sslHandler = NIOSSLServerHandler(
+                context: sslContext,
+                customVerificationCallback: verify
+              )
+            } else {
+              sslHandler = NIOSSLServerHandler(context: sslContext)
+            }
+
+            try sync.addHandler(sslHandler)
           }
           #endif // canImport(NIOSSL)
 
@@ -367,6 +373,9 @@ extension Server {
     /// the need to recalculate this dictionary each time we receive an rpc.
     internal var serviceProvidersByName: [Substring: CallHandlerProvider]
 
+    /// CORS configuration for gRPC-Web support.
+    public var webCORS = Configuration.CORS()
+
     #if canImport(NIOSSL)
     /// Create a `Configuration` with some pre-defined defaults.
     ///
@@ -401,11 +410,9 @@ extension Server {
     ) {
       self.target = target
       self.eventLoopGroup = eventLoopGroup
-      self
-        .serviceProvidersByName = Dictionary(
-          uniqueKeysWithValues: serviceProviders
-            .map { ($0.serviceName, $0) }
-        )
+      self.serviceProvidersByName = Dictionary(
+        uniqueKeysWithValues: serviceProviders.map { ($0.serviceName, $0) }
+      )
       self.errorDelegate = errorDelegate
       self.tlsConfiguration = tls.map { GRPCTLSConfiguration(transforming: $0) }
       self.connectionKeepalive = connectionKeepalive
@@ -451,6 +458,70 @@ extension Server {
   }
 }
 
+extension Server.Configuration {
+  public struct CORS: Hashable, Sendable {
+    /// Determines which 'origin' header field values are permitted in a CORS request.
+    public var allowedOrigins: AllowedOrigins
+    /// Sets the headers which are permitted in a response to a CORS request.
+    public var allowedHeaders: [String]
+    /// Enabling this value allows sets the "access-control-allow-credentials" header field
+    /// to "true" in respones to CORS requests. This must be enabled if the client intends to send
+    /// credentials.
+    public var allowCredentialedRequests: Bool
+    /// The maximum age in seconds which pre-flight CORS requests may be cached for.
+    public var preflightCacheExpiration: Int
+
+    public init(
+      allowedOrigins: AllowedOrigins = .all,
+      allowedHeaders: [String] = ["content-type", "x-grpc-web", "x-user-agent"],
+      allowCredentialedRequests: Bool = false,
+      preflightCacheExpiration: Int = 86400
+    ) {
+      self.allowedOrigins = allowedOrigins
+      self.allowedHeaders = allowedHeaders
+      self.allowCredentialedRequests = allowCredentialedRequests
+      self.preflightCacheExpiration = preflightCacheExpiration
+    }
+  }
+}
+
+extension Server.Configuration.CORS {
+  public struct AllowedOrigins: Hashable, Sendable {
+    enum Wrapped: Hashable, Sendable {
+      case all
+      case originBased
+      case only([String])
+      case custom(AnyCustomCORSAllowedOrigin)
+    }
+
+    private(set) var wrapped: Wrapped
+    private init(_ wrapped: Wrapped) {
+      self.wrapped = wrapped
+    }
+
+    /// Allow all origin values.
+    public static let all = Self(.all)
+
+    /// Allow all origin values; similar to `all` but returns the value of the origin header field
+    /// in the 'access-control-allow-origin' response header (rather than "*").
+    public static let originBased = Self(.originBased)
+
+    /// Allow only the given origin values.
+    public static func only(_ allowed: [String]) -> Self {
+      return Self(.only(allowed))
+    }
+
+    /// Provide a custom CORS origin check.
+    ///
+    /// - Parameter checkOrigin: A closure which is called with the value of the 'origin' header
+    ///     and returns the value to use in the 'access-control-allow-origin' response header,
+    ///     or `nil` if the origin is not allowed.
+    public static func custom<C: GRPCCustomCORSAllowedOrigin>(_ custom: C) -> Self {
+      return Self(.custom(AnyCustomCORSAllowedOrigin(custom)))
+    }
+  }
+}
+
 extension ServerBootstrapProtocol {
   fileprivate func bind(to target: BindTarget) -> EventLoopFuture<Channel> {
     switch target.wrapped {
@@ -472,5 +543,48 @@ extension ServerBootstrapProtocol {
 extension Comparable {
   internal func clamped(to range: ClosedRange<Self>) -> Self {
     return min(max(self, range.lowerBound), range.upperBound)
+  }
+}
+
+public protocol GRPCCustomCORSAllowedOrigin: Sendable, Hashable {
+  /// Returns the value to use for the 'access-control-allow-origin' response header for the given
+  /// value of the 'origin' request header.
+  ///
+  /// - Parameter origin: The value of the 'origin' request header field.
+  /// - Returns: The value to use for the 'access-control-allow-origin' header field or `nil` if no
+  ///     CORS related headers should be returned.
+  func check(origin: String) -> String?
+}
+
+extension Server.Configuration.CORS.AllowedOrigins {
+  struct AnyCustomCORSAllowedOrigin: GRPCCustomCORSAllowedOrigin {
+    private var checkOrigin: @Sendable (String) -> String?
+    private let hashInto: @Sendable (inout Hasher) -> Void
+    #if swift(>=5.7)
+    private let isEqualTo: @Sendable (any GRPCCustomCORSAllowedOrigin) -> Bool
+    #else
+    private let isEqualTo: @Sendable (Any) -> Bool
+    #endif
+
+    init<W: GRPCCustomCORSAllowedOrigin>(_ wrap: W) {
+      self.checkOrigin = { wrap.check(origin: $0) }
+      self.hashInto = { wrap.hash(into: &$0) }
+      self.isEqualTo = { wrap == ($0 as? W) }
+    }
+
+    func check(origin: String) -> String? {
+      return self.checkOrigin(origin)
+    }
+
+    func hash(into hasher: inout Hasher) {
+      self.hashInto(&hasher)
+    }
+
+    static func == (
+      lhs: Server.Configuration.CORS.AllowedOrigins.AnyCustomCORSAllowedOrigin,
+      rhs: Server.Configuration.CORS.AllowedOrigins.AnyCustomCORSAllowedOrigin
+    ) -> Bool {
+      return lhs.isEqualTo(rhs)
+    }
   }
 }

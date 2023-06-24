@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
-
 import Logging
 import NIOConcurrencyHelpers
 import NIOHPACK
@@ -30,6 +28,21 @@ public struct GRPCAsyncServerCallContext: Sendable {
   /// A response context which may be used to set response headers and trailers.
   public var response: Response {
     Response(contextProvider: self.contextProvider)
+  }
+
+  /// Notifies the client that the RPC has been accepted for processing by the server.
+  ///
+  /// On accepting the RPC the server will send the given headers (which may be empty) along with
+  /// any transport specific headers (such the ":status" pseudo header) to the client.
+  ///
+  /// It is not necessary to call this function: the RPC is implicitly accepted when the first
+  /// response message is sent, however this may be useful when clients require an early indication
+  /// that the RPC has been accepted.
+  ///
+  /// If the RPC has already been accepted (either implicitly or explicitly) then this function is
+  /// a no-op.
+  public func acceptRPC(headers: HPACKHeaders) async {
+    await self.contextProvider.acceptRPC(headers)
   }
 
   /// Access the ``UserInfo`` dictionary which is shared with the interceptor contexts for this RPC.
@@ -89,8 +102,8 @@ extension GRPCAsyncServerCallContext {
     /// Set the metadata to return at the start of the RPC.
     ///
     /// - Important: If this is required it should be updated _before_ the first response is sent
-    ///   via the response stream writer. Updates must not be made after the first response has
-    ///   been sent.
+    ///   via the response stream writer. Updates must not be made after the RPC has been accepted
+    ///   or the first response has been sent otherwise this method will throw an error.
     public func setHeaders(_ headers: HPACKHeaders) async throws {
       try await self.contextProvider.setResponseHeaders(headers)
     }
@@ -115,5 +128,3 @@ extension GRPCAsyncServerCallContext {
     }
   }
 }
-
-#endif

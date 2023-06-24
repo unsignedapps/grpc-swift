@@ -17,10 +17,8 @@ import Logging
 import NIOConcurrencyHelpers
 import NIOCore
 
-#if compiler(>=5.6)
 // Unchecked because all mutable state is protected by a lock.
 extension PooledChannel: @unchecked Sendable {}
-#endif // compiler(>=5.6)
 
 @usableFromInline
 internal final class PoolManager {
@@ -280,7 +278,7 @@ internal final class PoolManager {
     preferredEventLoop: EventLoop?,
     deadline: NIODeadline,
     logger: GRPCLogger,
-    streamInitializer initializer: @escaping (Channel) -> EventLoopFuture<Void>
+    streamInitializer initializer: @escaping @Sendable (Channel) -> EventLoopFuture<Void>
   ) -> PooledStreamChannel {
     let preferredEventLoopID = preferredEventLoop.map { EventLoopID($0) }
     let reservedPool = self.lock.withLock {

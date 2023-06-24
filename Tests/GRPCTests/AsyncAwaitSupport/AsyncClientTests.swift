@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
 import EchoImplementation
 import EchoModel
 import GRPC
@@ -34,16 +33,16 @@ final class AsyncClientCancellationTests: GRPCTestCase {
 
   override func tearDown() async throws {
     if self.pool != nil {
-      try self.pool.close().wait()
+      try await self.pool.close().get()
       self.pool = nil
     }
 
     if self.server != nil {
-      try self.server.close().wait()
+      try await self.server.close().get()
       self.server = nil
     }
 
-    try self.group.syncShutdownGracefully()
+    try await self.group.shutdownGracefully()
     self.group = nil
 
     try await super.tearDown()
@@ -415,6 +414,126 @@ final class AsyncClientCancellationTests: GRPCTestCase {
       XCTAssertFalse(error is CancellationError)
     }
   }
-}
 
-#endif // compiler(>=5.6)
+  func testCancelUnary() async throws {
+    // We don't want the RPC to complete before we cancel it so use the never resolving service.
+    let echo = try self.startServerAndClient(service: NeverResolvingEchoProvider())
+
+    do {
+      let get = echo.makeGetCall(.with { $0.text = "foo bar baz" })
+      let task = Task { try await get.initialMetadata }
+      task.cancel()
+      await XCTAssertThrowsError(try await task.value)
+    }
+
+    do {
+      let get = echo.makeGetCall(.with { $0.text = "foo bar baz" })
+      let task = Task { try await get.response }
+      task.cancel()
+      await XCTAssertThrowsError(try await task.value)
+    }
+
+    do {
+      let get = echo.makeGetCall(.with { $0.text = "foo bar baz" })
+      let task = Task { try await get.trailingMetadata }
+      task.cancel()
+      await XCTAssertNoThrowAsync(try await task.value)
+    }
+
+    do {
+      let get = echo.makeGetCall(.with { $0.text = "foo bar baz" })
+      let task = Task { await get.status }
+      task.cancel()
+      let status = await task.value
+      XCTAssertEqual(status.code, .cancelled)
+    }
+  }
+
+  func testCancelClientStreaming() async throws {
+    // We don't want the RPC to complete before we cancel it so use the never resolving service.
+    let echo = try self.startServerAndClient(service: NeverResolvingEchoProvider())
+
+    do {
+      let collect = echo.makeCollectCall()
+      let task = Task { try await collect.initialMetadata }
+      task.cancel()
+      await XCTAssertThrowsError(try await task.value)
+    }
+
+    do {
+      let collect = echo.makeCollectCall()
+      let task = Task { try await collect.response }
+      task.cancel()
+      await XCTAssertThrowsError(try await task.value)
+    }
+
+    do {
+      let collect = echo.makeCollectCall()
+      let task = Task { try await collect.trailingMetadata }
+      task.cancel()
+      await XCTAssertNoThrowAsync(try await task.value)
+    }
+
+    do {
+      let collect = echo.makeCollectCall()
+      let task = Task { await collect.status }
+      task.cancel()
+      let status = await task.value
+      XCTAssertEqual(status.code, .cancelled)
+    }
+  }
+
+  func testCancelServerStreaming() async throws {
+    // We don't want the RPC to complete before we cancel it so use the never resolving service.
+    let echo = try self.startServerAndClient(service: NeverResolvingEchoProvider())
+
+    do {
+      let expand = echo.makeExpandCall(.with { $0.text = "foo bar baz" })
+      let task = Task { try await expand.initialMetadata }
+      task.cancel()
+      await XCTAssertThrowsError(try await task.value)
+    }
+
+    do {
+      let expand = echo.makeExpandCall(.with { $0.text = "foo bar baz" })
+      let task = Task { try await expand.trailingMetadata }
+      task.cancel()
+      await XCTAssertNoThrowAsync(try await task.value)
+    }
+
+    do {
+      let expand = echo.makeExpandCall(.with { $0.text = "foo bar baz" })
+      let task = Task { await expand.status }
+      task.cancel()
+      let status = await task.value
+      XCTAssertEqual(status.code, .cancelled)
+    }
+  }
+
+  func testCancelBidirectionalStreaming() async throws {
+    // We don't want the RPC to complete before we cancel it so use the never resolving service.
+    let echo = try self.startServerAndClient(service: NeverResolvingEchoProvider())
+
+    do {
+      let update = echo.makeUpdateCall()
+      let task = Task { try await update.initialMetadata }
+      task.cancel()
+      await XCTAssertThrowsError(try await task.value)
+    }
+
+    do {
+      let update = echo.makeUpdateCall()
+      let task = Task { try await update.trailingMetadata }
+      task.cancel()
+      await XCTAssertNoThrowAsync(try await task.value)
+    }
+
+    do {
+      let update = echo.makeUpdateCall()
+      let task = Task { await update.status }
+      task.cancel()
+      let status = await task.value
+      XCTAssertEqual(status.code, .cancelled)
+    }
+  }
+}

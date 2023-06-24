@@ -22,26 +22,16 @@ final class IsConnectingDelegate: GRPCConnectionPoolDelegate {
   private var connecting = Set<GRPCConnectionID>()
   private var active = Set<GRPCConnectionID>()
 
-  enum StateNotifacation: Hashable, GRPCSendable {
+  enum StateNotifacation: Hashable, Sendable {
     case connecting
     case connected
   }
 
-  #if swift(>=5.6)
   private let onStateChange: @Sendable (StateNotifacation) -> Void
-  #else
-  private let onStateChange: (StateNotifacation) -> Void
-  #endif
 
-  #if swift(>=5.6)
   init(onStateChange: @escaping @Sendable (StateNotifacation) -> Void) {
     self.onStateChange = onStateChange
   }
-  #else
-  init(onStateChange: @escaping (StateNotifacation) -> Void) {
-    self.onStateChange = onStateChange
-  }
-  #endif
 
   func startedConnecting(id: GRPCConnectionID) {
     let didStartConnecting: Bool = self.lock.withLock {
@@ -94,9 +84,7 @@ final class IsConnectingDelegate: GRPCConnectionPoolDelegate {
   func connectionUtilizationChanged(id: GRPCConnectionID, streamsUsed: Int, streamCapacity: Int) {}
 }
 
-#if swift(>=5.6)
 extension IsConnectingDelegate: @unchecked Sendable {}
-#endif
 
 final class EventRecordingConnectionPoolDelegate: GRPCConnectionPoolDelegate {
   struct UnexpectedEvent: Error {
@@ -200,6 +188,56 @@ final class EventRecordingConnectionPoolDelegate: GRPCConnectionPoolDelegate {
   }
 }
 
-#if swift(>=5.6)
 extension EventRecordingConnectionPoolDelegate: @unchecked Sendable {}
-#endif // swift(>=5.6)
+
+final class AsyncEventStreamConnectionPoolDelegate: GRPCConnectionPoolDelegate {
+  private let continuation: AsyncStream<EventRecordingConnectionPoolDelegate.Event>.Continuation
+
+  static func makeDelegateAndAsyncStream()
+    -> (
+      AsyncEventStreamConnectionPoolDelegate,
+      AsyncStream<EventRecordingConnectionPoolDelegate.Event>
+    ) {
+    var continuation: AsyncStream<EventRecordingConnectionPoolDelegate.Event>.Continuation!
+    let asyncStream = AsyncStream(EventRecordingConnectionPoolDelegate.Event.self) {
+      continuation = $0
+    }
+    return (Self(continuation: continuation), asyncStream)
+  }
+
+  init(continuation: AsyncStream<EventRecordingConnectionPoolDelegate.Event>.Continuation) {
+    self.continuation = continuation
+  }
+
+  func connectionAdded(id: GRPCConnectionID) {
+    self.continuation.yield(.connectionAdded(id))
+  }
+
+  func startedConnecting(id: GRPCConnectionID) {
+    self.continuation.yield(.startedConnecting(id))
+  }
+
+  func connectFailed(id: GRPCConnectionID, error: Error) {
+    self.continuation.yield(.connectFailed(id))
+  }
+
+  func connectSucceeded(id: GRPCConnectionID, streamCapacity: Int) {
+    self.continuation.yield(.connectSucceeded(id, streamCapacity))
+  }
+
+  func connectionClosed(id: GRPCConnectionID, error: Error?) {
+    self.continuation.yield(.connectionClosed(id))
+  }
+
+  func connectionUtilizationChanged(id: GRPCConnectionID, streamsUsed: Int, streamCapacity: Int) {
+    self.continuation.yield(.connectionUtilizationChanged(id, streamsUsed, streamCapacity))
+  }
+
+  func connectionQuiescing(id: GRPCConnectionID) {
+    self.continuation.yield(.connectionQuiescing(id))
+  }
+
+  func connectionRemoved(id: GRPCConnectionID) {
+    self.continuation.yield(.connectionRemoved(id))
+  }
+}

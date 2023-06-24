@@ -13,9 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
-
-@available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
+@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
 extension AsyncSequence {
   internal func collect() async throws -> [Element] {
     return try await self.reduce(into: []) { accumulated, next in
@@ -27,5 +25,3 @@ extension AsyncSequence {
     return try await self.reduce(0) { count, _ in count + 1 }
   }
 }
-
-#endif // compiler(>=5.6)

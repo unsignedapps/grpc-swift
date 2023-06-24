@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if swift(>=5.6)
+#if os(Linux)
 @preconcurrency import Foundation
 #else
 import Foundation
-#endif // swift(>=5.6)
+#endif
 
 import Logging
 import NIOCore
@@ -57,37 +57,34 @@ import SwiftProtobuf
 ///               │  DelegatingErrorHandler  │
 ///               └──────────▲───────────────┘
 ///                HTTP2Frame│
-///                          │                ⠇ ⠇   ⠇ ⠇
-///                          │               ┌┴─▼┐ ┌┴─▼┐
-///                          │               │   | │   | HTTP/2 streams
-///                          │               └▲─┬┘ └▲─┬┘
-///                          │                │ │   │ │ HTTP2Frame
-///                        ┌─┴────────────────┴─▼───┴─▼┐
-///                        │   HTTP2StreamMultiplexer  |
-///                        └─▲───────────────────────┬─┘
-///                HTTP2Frame│                       │HTTP2Frame
-///                        ┌─┴───────────────────────▼─┐
-///                        │       GRPCIdleHandler     │
-///                        └─▲───────────────────────┬─┘
-///                HTTP2Frame│                       │HTTP2Frame
-///                        ┌─┴───────────────────────▼─┐
-///                        │       NIOHTTP2Handler     │
-///                        └─▲───────────────────────┬─┘
-///                ByteBuffer│                       │ByteBuffer
-///                        ┌─┴───────────────────────▼─┐
-///                        │       NIOSSLHandler       │
-///                        └─▲───────────────────────┬─┘
-///                ByteBuffer│                       │ByteBuffer
-///                          │                       ▼
+///                          │
+///                          │
+///                          │
+///                          │
+///                          │
+///                HTTP2Frame│                  ⠇        ⠇ ⠇   ⠇ ⠇
+///                        ┌─┴──────────────────▼─┐     ┌┴─▼┐ ┌┴─▼┐
+///                        │    GRPCIdleHandler   │     │   | │   | HTTP/2 streams
+///                        └─▲──────────────────┬─┘     └▲─┬┘ └▲─┬┘
+///                HTTP2Frame│                  │        │ │   │ │ HTTP2Frame
+///                        ┌─┴──────────────────▼────────┴─▼───┴─▼┐
+///                        │            NIOHTTP2Handler           │
+///                        └─▲──────────────────────────────────┬─┘
+///                ByteBuffer│                                  │ByteBuffer
+///                        ┌─┴──────────────────────────────────▼─┐
+///                        │             NIOSSLHandler            │
+///                        └─▲──────────────────────────────────┬─┘
+///                ByteBuffer│                                  │ByteBuffer
+///                          │                                  ▼
 ///
 /// The 'GRPCIdleHandler' intercepts HTTP/2 frames and various events and is responsible for
 /// informing and controlling the state of the connection (idling and keepalive). The HTTP/2 streams
 /// are used to handle individual RPCs.
-public final class ClientConnection: GRPCSendable {
+public final class ClientConnection: Sendable {
   private let connectionManager: ConnectionManager
 
   /// HTTP multiplexer from the underlying channel handling gRPC calls.
-  internal func getMultiplexer() -> EventLoopFuture<HTTP2StreamMultiplexer> {
+  internal func getMultiplexer() -> EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> {
     return self.connectionManager.getHTTP2Multiplexer()
   }
 
@@ -249,7 +246,7 @@ extension ClientConnection: GRPCChannel {
   }
 
   private static func makeStreamChannel(
-    using result: Result<HTTP2StreamMultiplexer, Error>,
+    using result: Result<NIOHTTP2Handler.StreamMultiplexer, Error>,
     promise: EventLoopPromise<Channel>
   ) {
     switch result {
@@ -266,7 +263,7 @@ extension ClientConnection: GRPCChannel {
 // MARK: - Configuration structures
 
 /// A target to connect to.
-public struct ConnectionTarget: GRPCSendable {
+public struct ConnectionTarget: Sendable {
   internal enum Wrapped {
     case hostAndPort(String, Int)
     case unixDomainSocket(String)
@@ -320,8 +317,8 @@ public struct ConnectionTarget: GRPCSendable {
 }
 
 /// The connectivity behavior to use when starting an RPC.
-public struct CallStartBehavior: Hashable, GRPCSendable {
-  internal enum Behavior: Hashable, GRPCSendable {
+public struct CallStartBehavior: Hashable, Sendable {
+  internal enum Behavior: Hashable, Sendable {
     case waitsForConnectivity
     case fastFailure
   }
@@ -354,7 +351,7 @@ public struct CallStartBehavior: Hashable, GRPCSendable {
 extension ClientConnection {
   /// Configuration for a ``ClientConnection``. Users should prefer using one of the
   /// ``ClientConnection`` builders: ``ClientConnection/secure(group:)`` or ``ClientConnection/insecure(group:)``.
-  public struct Configuration: GRPCSendable {
+  public struct Configuration: Sendable {
     /// The target to connect to.
     public var target: ConnectionTarget
 
@@ -454,15 +451,10 @@ extension ClientConnection {
     /// used to add additional handlers to the pipeline and is intended for debugging.
     ///
     /// - Warning: The initializer closure may be invoked *multiple times*.
-    #if compiler(>=5.6)
     @preconcurrency
     public var debugChannelInitializer: (@Sendable (Channel) -> EventLoopFuture<Void>)?
-    #else
-    public var debugChannelInitializer: ((Channel) -> EventLoopFuture<Void>)?
-    #endif
 
     #if canImport(NIOSSL)
-    #if compiler(>=5.6)
     /// Create a `Configuration` with some pre-defined defaults. Prefer using
     /// `ClientConnection.secure(group:)` to build a connection secured with TLS or
     /// `ClientConnection.insecure(group:)` to build a plaintext connection.
@@ -519,41 +511,6 @@ extension ClientConnection {
       self.backgroundActivityLogger = backgroundActivityLogger
       self.debugChannelInitializer = debugChannelInitializer
     }
-    #else
-    @available(*, deprecated, renamed: "default(target:eventLoopGroup:)")
-    public init(
-      target: ConnectionTarget,
-      eventLoopGroup: EventLoopGroup,
-      errorDelegate: ClientErrorDelegate? = LoggingClientErrorDelegate(),
-      connectivityStateDelegate: ConnectivityStateDelegate? = nil,
-      connectivityStateDelegateQueue: DispatchQueue? = nil,
-      tls: Configuration.TLS? = nil,
-      connectionBackoff: ConnectionBackoff? = ConnectionBackoff(),
-      connectionKeepalive: ClientConnectionKeepalive = ClientConnectionKeepalive(),
-      connectionIdleTimeout: TimeAmount = .minutes(30),
-      callStartBehavior: CallStartBehavior = .waitsForConnectivity,
-      httpTargetWindowSize: Int = 8 * 1024 * 1024,
-      backgroundActivityLogger: Logger = Logger(
-        label: "io.grpc",
-        factory: { _ in SwiftLogNoOpLogHandler() }
-      ),
-      debugChannelInitializer: ((Channel) -> EventLoopFuture<Void>)? = nil
-    ) {
-      self.target = target
-      self.eventLoopGroup = eventLoopGroup
-      self.errorDelegate = errorDelegate
-      self.connectivityStateDelegate = connectivityStateDelegate
-      self.connectivityStateDelegateQueue = connectivityStateDelegateQueue
-      self.tlsConfiguration = tls.map { GRPCTLSConfiguration(transforming: $0) }
-      self.connectionBackoff = connectionBackoff
-      self.connectionKeepalive = connectionKeepalive
-      self.connectionIdleTimeout = connectionIdleTimeout
-      self.callStartBehavior = callStartBehavior
-      self.httpTargetWindowSize = httpTargetWindowSize
-      self.backgroundActivityLogger = backgroundActivityLogger
-      self.debugChannelInitializer = debugChannelInitializer
-    }
-    #endif // compiler(>=5.6)
     #endif // canImport(NIOSSL)
 
     private init(eventLoopGroup: EventLoopGroup, target: ConnectionTarget) {
@@ -650,29 +607,31 @@ extension ChannelPipeline.SynchronousOperations {
       HTTP2Setting(parameter: .initialWindowSize, value: httpTargetWindowSize),
     ]
 
-    // We could use 'configureHTTP2Pipeline' here, but we need to add a few handlers between the
-    // two HTTP/2 handlers so we'll do it manually instead.
-    try self.addHandler(NIOHTTP2Handler(mode: .client, initialSettings: initialSettings))
-
-    let h2Multiplexer = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      targetWindowSize: httpTargetWindowSize,
-      inboundStreamInitializer: nil
-    )
-
-    // The multiplexer is passed through the idle handler so it is only reported on
-    // successful channel activation - with happy eyeballs multiple pipelines can
-    // be constructed so it's not safe to report just yet.
-    try self.addHandler(GRPCIdleHandler(
+    let grpcIdleHandler = GRPCIdleHandler(
       connectionManager: connectionManager,
-      multiplexer: h2Multiplexer,
       idleTimeout: connectionIdleTimeout,
       keepalive: connectionKeepalive,
       logger: logger
-    ))
+    )
 
-    try self.addHandler(h2Multiplexer)
+    var connectionConfiguration = NIOHTTP2Handler.ConnectionConfiguration()
+    connectionConfiguration.initialSettings = initialSettings
+    var streamConfiguration = NIOHTTP2Handler.StreamConfiguration()
+    streamConfiguration.targetWindowSize = httpTargetWindowSize
+    let h2Handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      connectionConfiguration: connectionConfiguration,
+      streamConfiguration: streamConfiguration,
+      streamDelegate: grpcIdleHandler
+    ) { channel in
+      channel.close()
+    }
+    try self.addHandler(h2Handler)
+
+    grpcIdleHandler.setMultiplexer(try h2Handler.syncMultiplexer())
+    try self.addHandler(grpcIdleHandler)
+
     try self.addHandler(DelegatingErrorHandler(logger: logger, delegate: errorDelegate))
   }
 }
@@ -682,7 +641,13 @@ extension Channel {
     errorDelegate: ClientErrorDelegate?,
     logger: Logger
   ) -> EventLoopFuture<Void> {
-    return self.configureHTTP2Pipeline(mode: .client, inboundStreamInitializer: nil).flatMap { _ in
+    return self.configureHTTP2Pipeline(
+      mode: .client,
+      connectionConfiguration: .init(),
+      streamConfiguration: .init()
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }.flatMap { _ in
       self.pipeline.addHandler(DelegatingErrorHandler(logger: logger, delegate: errorDelegate))
     }
   }

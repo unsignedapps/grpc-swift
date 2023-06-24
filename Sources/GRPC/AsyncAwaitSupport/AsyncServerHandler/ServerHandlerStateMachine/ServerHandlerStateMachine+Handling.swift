@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
 import NIOHPACK
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -51,16 +50,16 @@ extension ServerHandlerStateMachine {
     @inlinable
     mutating func setResponseHeaders(
       _ metadata: HPACKHeaders
-    ) -> Self.NextStateAndOutput<Void> {
-      self.responseHeaders.update(metadata)
-      return .init(nextState: .handling(self))
+    ) -> Self.NextStateAndOutput<Bool> {
+      let output = self.responseHeaders.update(metadata)
+      return .init(nextState: .handling(self), output: output)
     }
 
     @inlinable
     mutating func setResponseTrailers(
       _ metadata: HPACKHeaders
     ) -> Self.NextStateAndOutput<Void> {
-      self.responseTrailers.update(metadata)
+      _ = self.responseTrailers.update(metadata)
       return .init(nextState: .handling(self))
     }
 
@@ -110,4 +109,3 @@ extension ServerHandlerStateMachine {
     }
   }
 }
-#endif // compiler(>=5.6)

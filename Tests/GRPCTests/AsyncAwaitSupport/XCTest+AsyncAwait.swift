@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
 import XCTest
 
 @available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
@@ -31,7 +30,20 @@ internal func XCTAssertThrowsError<T>(
   }
 }
 
-fileprivate enum TaskResult<Result> {
+@available(macOS 12, iOS 15, tvOS 15, watchOS 8, *)
+internal func XCTAssertNoThrowAsync<T>(
+  _ expression: @autoclosure () async throws -> T,
+  file: StaticString = #filePath,
+  line: UInt = #line
+) async {
+  do {
+    _ = try await expression()
+  } catch {
+    XCTFail("Expression throw error '\(error)'", file: file, line: line)
+  }
+}
+
+private enum TaskResult<Result> {
   case operation(Result)
   case cancellation
 }
@@ -70,5 +82,3 @@ func withTaskCancelledAfter<Result>(
     try await group.waitForAll()
   }
 }
-
-#endif // compiler(>=5.6)

@@ -116,7 +116,7 @@ extension ConnectionManagerTests {
       return channelPromise.futureResult
     }
 
-    let multiplexer: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let multiplexer: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let channel = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -146,20 +146,22 @@ extension ConnectionManagerTests {
 
     // Setup the real channel and activate it.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try channel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.addHandler(idleHandler).wait()
     channelPromise.succeed(channel)
     XCTAssertNoThrow(
       try channel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -169,7 +171,7 @@ extension ConnectionManagerTests {
     // Write a settings frame on the root stream; this'll make the channel 'ready'.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try channel.writeInbound(frame))
+      XCTAssertNoThrow(try channel.writeInbound(frame.encode()))
     }
 
     // Close the channel.
@@ -188,7 +190,7 @@ extension ConnectionManagerTests {
     }
 
     // Start the connection.
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -197,20 +199,23 @@ extension ConnectionManagerTests {
 
     // Setup the channel.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try channel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.addHandler(idleHandler).wait()
     channelPromise.succeed(channel)
     XCTAssertNoThrow(
       try channel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -220,7 +225,7 @@ extension ConnectionManagerTests {
     // Write a settings frame on the root stream; this'll make the channel 'ready'.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try channel.writeInbound(frame))
+      XCTAssertNoThrow(try channel.writeInbound(frame.encode()))
       // Wait for the multiplexer, it _must_ be ready now.
       XCTAssertNoThrow(try readyChannelMux.wait())
     }
@@ -239,6 +244,146 @@ extension ConnectionManagerTests {
     }
   }
 
+  /// Forwards only the first `channelInactive` call
+  ///
+  /// This is useful in tests where we intentionally mis-use the channels
+  /// and call `fireChannelInactive` manually during the test but don't want
+  /// teardown to cause precondition failures due to this unexpected behavior.
+  class SwallowSecondInactiveHandler: ChannelInboundHandler {
+    typealias InboundIn = HTTP2Frame
+    typealias OutboundOut = HTTP2Frame
+
+    private var seenAnInactive = false
+    func channelInactive(context: ChannelHandlerContext) {
+      if !self.seenAnInactive {
+        self.seenAnInactive = true
+        context.fireChannelInactive()
+      }
+    }
+  }
+
+  func testChannelInactiveBeforeActiveWithNoReconnect() throws {
+    let channel = EmbeddedChannel(loop: self.loop)
+    let channelPromise = self.loop.makePromise(of: Channel.self)
+
+    let manager = self.makeConnectionManager { _, _ in
+      return channelPromise.futureResult
+    }
+
+    // Start the connection.
+    self.waitForStateChange(from: .idle, to: .connecting) {
+      // Triggers the connect.
+      _ = manager.getHTTP2Multiplexer()
+      self.loop.run()
+    }
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
+    )
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.syncOperations.addHandler(SwallowSecondInactiveHandler())
+    try channel.pipeline.syncOperations.addHandler(h2handler)
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.syncOperations.addHandler(idleHandler)
+    try channel.pipeline.syncOperations.addHandler(NIOCloseOnErrorHandler())
+    channelPromise.succeed(channel)
+
+    // Oops: wrong way around. We should tolerate this - just don't crash.
+    channel.pipeline.fireChannelInactive()
+    channel.pipeline.fireChannelActive()
+
+    channel.embeddedEventLoop.run()
+    try manager.shutdown(mode: .forceful).wait()
+  }
+
+  func testChannelInactiveBeforeActiveWillReconnect() throws {
+    var channels = [EmbeddedChannel(loop: self.loop), EmbeddedChannel(loop: self.loop)]
+    var channelPromises: [EventLoopPromise<Channel>] = [self.loop.makePromise(),
+                                                        self.loop.makePromise()]
+    var channelFutures = Array(channelPromises.map { $0.futureResult })
+
+    var configuration = self.defaultConfiguration
+    configuration.connectionBackoff = .oneSecondFixed
+
+    let manager = self.makeConnectionManager(configuration: configuration) { _, _ in
+      return channelFutures.removeLast()
+    }
+
+    // Start the connection.
+    self.waitForStateChange(from: .idle, to: .connecting) {
+      // Triggers the connect.
+      _ = manager.getHTTP2Multiplexer()
+      self.loop.run()
+    }
+
+    // Setup the channel.
+    let channel1 = channels.removeLast()
+    let channel1Promise = channelPromises.removeLast()
+    let idleHandler1 = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
+    )
+    let h2handler1 = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel1.eventLoop,
+      streamDelegate: idleHandler1
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel1.pipeline.syncOperations.addHandler(SwallowSecondInactiveHandler())
+    try channel1.pipeline.syncOperations.addHandler(h2handler1)
+    idleHandler1.setMultiplexer(try h2handler1.syncMultiplexer())
+    try channel1.pipeline.syncOperations.addHandler(idleHandler1)
+    try channel1.pipeline.syncOperations.addHandler(NIOCloseOnErrorHandler())
+    channel1Promise.succeed(channel1)
+    // Oops: wrong way around. We should tolerate this.
+    channel1.pipeline.fireChannelInactive()
+    channel1.pipeline.fireChannelActive()
+
+    // Start the next attempt.
+    self.loop.advanceTime(by: .seconds(1))
+
+    let channel2 = channels.removeLast()
+    let channel2Promise = channelPromises.removeLast()
+    let idleHandler2 = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
+    )
+    let h2handler2 = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel2.eventLoop,
+      streamDelegate: idleHandler2
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+
+    try channel2.pipeline.syncOperations.addHandler(SwallowSecondInactiveHandler())
+    try channel2.pipeline.syncOperations.addHandler(h2handler2)
+    idleHandler2.setMultiplexer(try h2handler2.syncMultiplexer())
+    try channel2.pipeline.syncOperations.addHandler(idleHandler2)
+    try channel2.pipeline.syncOperations.addHandler(NIOCloseOnErrorHandler())
+    channel2Promise.succeed(channel2)
+
+    try self.waitForStateChange(from: .connecting, to: .ready) {
+      channel2.pipeline.fireChannelActive()
+      let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
+      XCTAssertNoThrow(try channel2.writeInbound(frame.encode()))
+    }
+  }
+
   func testIdleTimeoutWhenThereAreActiveStreams() throws {
     let channelPromise = self.loop.makePromise(of: Channel.self)
     let manager = self.makeConnectionManager { _, _ in
@@ -246,7 +391,7 @@ extension ConnectionManagerTests {
     }
 
     // Start the connection.
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -255,20 +400,23 @@ extension ConnectionManagerTests {
 
     // Setup the channel.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try channel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.addHandler(idleHandler).wait()
 
     channelPromise.succeed(channel)
     XCTAssertNoThrow(
@@ -279,18 +427,13 @@ extension ConnectionManagerTests {
     // Write a settings frame on the root stream; this'll make the channel 'ready'.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try channel.writeInbound(frame))
+      XCTAssertNoThrow(try channel.writeInbound(frame.encode()))
       // Wait for the HTTP/2 stream multiplexer, it _must_ be ready now.
       XCTAssertNoThrow(try readyChannelMux.wait())
     }
 
     // "create" a stream; the details don't matter here.
-    let streamCreated = NIOHTTP2StreamCreatedEvent(
-      streamID: 1,
-      localInitialWindowSize: nil,
-      remoteInitialWindowSize: nil
-    )
-    channel.pipeline.fireUserInboundEventTriggered(streamCreated)
+    idleHandler.streamCreated(1, channel: channel)
 
     // Wait for the idle timeout: this should _not_ cause the channel to idle.
     self.loop.advanceTime(by: .minutes(5))
@@ -298,8 +441,7 @@ extension ConnectionManagerTests {
     // Now we're going to close the stream and wait for an idle timeout and then shutdown.
     self.waitForStateChange(from: .ready, to: .idle) {
       // Close the stream.
-      let streamClosed = StreamClosedEvent(streamID: 1, reason: nil)
-      channel.pipeline.fireUserInboundEventTriggered(streamClosed)
+      idleHandler.streamClosed(1, channel: channel)
       // ... wait for the idle timeout,
       self.loop.advanceTime(by: .minutes(5))
     }
@@ -318,7 +460,7 @@ extension ConnectionManagerTests {
       return channelPromise.futureResult
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -327,20 +469,23 @@ extension ConnectionManagerTests {
 
     // Setup the channel.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try channel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.addHandler(idleHandler).wait()
     channelPromise.succeed(channel)
     XCTAssertNoThrow(
       try channel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -378,10 +523,10 @@ extension ConnectionManagerTests {
       return next
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self.waitForStateChanges([
+    let readyChannelMux = self.waitForStateChanges([
       Change(from: .idle, to: .connecting),
       Change(from: .connecting, to: .transientFailure),
-    ]) {
+    ]) { () -> EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> in
       // Get a HTTP/2 stream multiplexer.
       let readyChannelMux = manager.getHTTP2Multiplexer()
       self.loop.run()
@@ -399,20 +544,23 @@ extension ConnectionManagerTests {
 
     // Setup the actual channel and complete the promise.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try channel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.addHandler(idleHandler).wait()
     channelPromise.succeed(channel)
     XCTAssertNoThrow(
       try channel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -422,7 +570,7 @@ extension ConnectionManagerTests {
     // Write a SETTINGS frame on the root stream.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try channel.writeInbound(frame))
+      XCTAssertNoThrow(try channel.writeInbound(frame.encode()))
     }
 
     // Wait for the HTTP/2 stream multiplexer, it _must_ be ready now.
@@ -443,7 +591,7 @@ extension ConnectionManagerTests {
       return channelPromise.futureResult
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -479,10 +627,10 @@ extension ConnectionManagerTests {
       self.loop.makeFailedFuture(DoomedChannelError())
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self.waitForStateChanges([
+    let readyChannelMux = self.waitForStateChanges([
       Change(from: .idle, to: .connecting),
       Change(from: .connecting, to: .transientFailure),
-    ]) {
+    ]) { () -> EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> in
       // Get a HTTP/2 stream multiplexer.
       let readyChannelMux = manager.getHTTP2Multiplexer()
       self.loop.run()
@@ -506,7 +654,7 @@ extension ConnectionManagerTests {
       return channelPromise.futureResult
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -515,20 +663,23 @@ extension ConnectionManagerTests {
 
     // Prepare the channel
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try channel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.addHandler(idleHandler).wait()
     channelPromise.succeed(channel)
     XCTAssertNoThrow(
       try channel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -581,7 +732,7 @@ extension ConnectionManagerTests {
       return next
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -590,20 +741,23 @@ extension ConnectionManagerTests {
 
     // Prepare the channel
     let firstChannel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: firstChannel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try firstChannel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: firstChannel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try firstChannel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try firstChannel.pipeline.addHandler(idleHandler).wait()
 
     channelPromise.succeed(firstChannel)
     XCTAssertNoThrow(
@@ -657,7 +811,7 @@ extension ConnectionManagerTests {
       return next
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -666,20 +820,22 @@ extension ConnectionManagerTests {
 
     // Prepare the first channel
     let firstChannel = EmbeddedChannel(loop: self.loop)
-    let firstH2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: firstChannel,
-      inboundStreamInitializer: nil
+    let firstIdleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try firstChannel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: firstH2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+    let firstH2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: firstChannel.eventLoop,
+      streamDelegate: firstIdleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try firstChannel.pipeline.addHandler(firstH2handler).wait()
+    firstIdleHandler.setMultiplexer(try firstH2handler.syncMultiplexer())
+    try firstChannel.pipeline.addHandler(firstIdleHandler).wait()
     firstChannelPromise.succeed(firstChannel)
     XCTAssertNoThrow(
       try firstChannel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -689,19 +845,14 @@ extension ConnectionManagerTests {
     // Write a SETTINGS frame on the root stream.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try firstChannel.writeInbound(frame))
+      XCTAssertNoThrow(try firstChannel.writeInbound(frame.encode()))
     }
 
     // Channel should now be ready.
     XCTAssertNoThrow(try readyChannelMux.wait())
 
     // Kill the first channel. But first ensure there's an active RPC, otherwise we'll idle.
-    let streamCreated = NIOHTTP2StreamCreatedEvent(
-      streamID: 1,
-      localInitialWindowSize: nil,
-      remoteInitialWindowSize: nil
-    )
-    firstChannel.pipeline.fireUserInboundEventTriggered(streamCreated)
+    firstIdleHandler.streamCreated(1, channel: firstChannel)
 
     try self.waitForStateChange(from: .ready, to: .transientFailure) {
       XCTAssertNoThrow(try firstChannel.close().wait())
@@ -714,20 +865,22 @@ extension ConnectionManagerTests {
 
     // Prepare the second channel
     let secondChannel = EmbeddedChannel(loop: self.loop)
-    let secondH2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: secondChannel,
-      inboundStreamInitializer: nil
+    let secondIdleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try secondChannel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: secondH2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+    let secondH2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: secondChannel.eventLoop,
+      streamDelegate: secondIdleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try secondChannel.pipeline.addHandler(secondH2handler).wait()
+    secondIdleHandler.setMultiplexer(try secondH2handler.syncMultiplexer())
+    try secondChannel.pipeline.addHandler(secondIdleHandler).wait()
     secondChannelPromise.succeed(secondChannel)
     XCTAssertNoThrow(
       try secondChannel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -737,7 +890,7 @@ extension ConnectionManagerTests {
     // Write a SETTINGS frame on the root stream.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try secondChannel.writeInbound(frame))
+      XCTAssertNoThrow(try secondChannel.writeInbound(frame.encode()))
     }
 
     // Now shutdown
@@ -754,7 +907,7 @@ extension ConnectionManagerTests {
       return channelPromise.futureResult
     }
 
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
       .waitForStateChange(from: .idle, to: .connecting) {
         let readyChannelMux = manager.getHTTP2Multiplexer()
         self.loop.run()
@@ -763,20 +916,23 @@ extension ConnectionManagerTests {
 
     // Setup the channel.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    try channel.pipeline.addHandler(
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      )
-    ).wait()
+
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    try channel.pipeline.addHandler(idleHandler).wait()
     channelPromise.succeed(channel)
     XCTAssertNoThrow(
       try channel.connect(to: SocketAddress(unixDomainSocketPath: "/ignored"))
@@ -786,7 +942,7 @@ extension ConnectionManagerTests {
     try self.waitForStateChange(from: .connecting, to: .ready) {
       // Write a SETTINGS frame on the root stream.
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try channel.writeInbound(frame))
+      XCTAssertNoThrow(try channel.writeInbound(frame.encode()))
     }
 
     // Wait for the HTTP/2 stream multiplexer, it _must_ be ready now.
@@ -799,7 +955,7 @@ extension ConnectionManagerTests {
         streamID: .rootStream,
         payload: .goAway(lastStreamID: 1, errorCode: .noError, opaqueData: nil)
       )
-      XCTAssertNoThrow(try channel.writeInbound(goAway))
+      XCTAssertNoThrow(try channel.writeInbound(goAway.encode()))
       self.loop.run()
     }
 
@@ -905,31 +1061,34 @@ extension ConnectionManagerTests {
     }
 
     // Start the connection.
-    let readyChannelMux: EventLoopFuture<HTTP2StreamMultiplexer> = self.waitForStateChange(
-      from: .idle,
-      to: .connecting
-    ) {
-      let readyChannelMux = manager.getHTTP2Multiplexer()
-      self.loop.run()
-      return readyChannelMux
-    }
+    let readyChannelMux: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self
+      .waitForStateChange(
+        from: .idle,
+        to: .connecting
+      ) {
+        let readyChannelMux = manager.getHTTP2Multiplexer()
+        self.loop.run()
+        return readyChannelMux
+      }
 
     // Setup the real channel and activate it.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    XCTAssertNoThrow(try channel.pipeline.addHandlers([
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      ),
-    ]).wait())
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    XCTAssertNoThrow(try channel.pipeline.addHandler(idleHandler).wait())
     channelPromise.succeed(channel)
     self.loop.run()
 
@@ -939,7 +1098,7 @@ extension ConnectionManagerTests {
     // Write a SETTINGS frame on the root stream.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try channel.writeInbound(frame))
+      XCTAssertNoThrow(try channel.writeInbound(frame.encode()))
     }
 
     // The channel should now be ready.
@@ -963,7 +1122,7 @@ extension ConnectionManagerTests {
     let readyChannelMux = self.waitForStateChange(
       from: .idle,
       to: .connecting
-    ) { () -> EventLoopFuture<HTTP2StreamMultiplexer> in
+    ) { () -> EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> in
       let readyChannelMux = manager.getHTTP2Multiplexer()
       self.loop.run()
       return readyChannelMux
@@ -971,20 +1130,22 @@ extension ConnectionManagerTests {
 
     // Setup the actual channel and activate it.
     let channel = EmbeddedChannel(loop: self.loop)
-    let h2mux = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
+    let idleHandler = GRPCIdleHandler(
+      connectionManager: manager,
+      idleTimeout: .minutes(5),
+      keepalive: .init(),
+      logger: self.logger
     )
-    XCTAssertNoThrow(try channel.pipeline.addHandlers([
-      GRPCIdleHandler(
-        connectionManager: manager,
-        multiplexer: h2mux,
-        idleTimeout: .minutes(5),
-        keepalive: .init(),
-        logger: self.logger
-      ),
-    ]).wait())
+    let h2handler = NIOHTTP2Handler(
+      mode: .client,
+      eventLoop: channel.eventLoop,
+      streamDelegate: idleHandler
+    ) { channel in
+      channel.eventLoop.makeSucceededVoidFuture()
+    }
+    try channel.pipeline.addHandler(h2handler).wait()
+    idleHandler.setMultiplexer(try h2handler.syncMultiplexer())
+    XCTAssertNoThrow(try channel.pipeline.addHandler(idleHandler).wait())
     channelPromise.succeed(channel)
     self.loop.run()
 
@@ -994,7 +1155,7 @@ extension ConnectionManagerTests {
     // "ready" the connection.
     try self.waitForStateChange(from: .connecting, to: .ready) {
       let frame = HTTP2Frame(streamID: .rootStream, payload: .settings(.settings([])))
-      XCTAssertNoThrow(try channel.writeInbound(frame))
+      XCTAssertNoThrow(try channel.writeInbound(frame.encode()))
     }
 
     // The HTTP/2 stream multiplexer should now be ready.
@@ -1027,12 +1188,6 @@ extension ConnectionManagerTests {
       XCTAssertNoThrow(try channel.finish())
     }
 
-    let multiplexer = HTTP2StreamMultiplexer(
-      mode: .client,
-      channel: channel,
-      inboundStreamInitializer: nil
-    )
-
     class HTTP2Delegate: ConnectionManagerHTTP2Delegate {
       var streamsOpened = 0
       var streamsClosed = 0
@@ -1061,11 +1216,19 @@ extension ConnectionManagerTests {
       channelProvider: HookedChannelProvider { manager, eventLoop -> EventLoopFuture<Channel> in
         let idleHandler = GRPCIdleHandler(
           connectionManager: manager,
-          multiplexer: multiplexer,
           idleTimeout: .minutes(5),
           keepalive: ClientConnectionKeepalive(),
           logger: self.logger
         )
+        let h2Handler = NIOHTTP2Handler(
+          mode: .client,
+          eventLoop: channel.eventLoop,
+          streamDelegate: idleHandler
+        ) { channel in
+          channel.eventLoop.makeSucceededVoidFuture()
+        }
+        try! channel.pipeline.syncOperations.addHandler(h2Handler)
+        idleHandler.setMultiplexer(try! h2Handler.syncMultiplexer())
 
         // We're going to cheat a bit by not putting the multiplexer in the channel. This allows
         // us to just fire stream created/closed events into the channel.
@@ -1097,30 +1260,26 @@ extension ConnectionManagerTests {
       let settings = [HTTP2Setting(parameter: .maxConcurrentStreams, value: maxConcurrentStreams)]
       return HTTP2Frame(streamID: .rootStream, payload: .settings(.settings(settings)))
     }
-    XCTAssertNoThrow(try channel.writeInbound(makeSettingsFrame(maxConcurrentStreams: 42)))
+    XCTAssertNoThrow(try channel.writeInbound(makeSettingsFrame(maxConcurrentStreams: 42).encode()))
 
     // We're ready now so the future multiplexer will resolve and we'll have seen an update to
     // max concurrent streams.
     XCTAssertNoThrow(try futureMultiplexer.wait())
     XCTAssertEqual(http2.maxConcurrentStreams, 42)
 
-    XCTAssertNoThrow(try channel.writeInbound(makeSettingsFrame(maxConcurrentStreams: 13)))
+    XCTAssertNoThrow(try channel.writeInbound(makeSettingsFrame(maxConcurrentStreams: 13).encode()))
     XCTAssertEqual(http2.maxConcurrentStreams, 13)
+
+    let streamDelegate = try channel.pipeline.handler(type: GRPCIdleHandler.self).wait()
 
     // Open some streams.
     for streamID in stride(from: HTTP2StreamID(1), to: HTTP2StreamID(9), by: 2) {
-      let streamCreated = NIOHTTP2StreamCreatedEvent(
-        streamID: streamID,
-        localInitialWindowSize: nil,
-        remoteInitialWindowSize: nil
-      )
-      channel.pipeline.fireUserInboundEventTriggered(streamCreated)
+      streamDelegate.streamCreated(streamID, channel: channel)
     }
 
     // ... and then close them.
     for streamID in stride(from: HTTP2StreamID(1), to: HTTP2StreamID(9), by: 2) {
-      let streamClosed = StreamClosedEvent(streamID: streamID, reason: nil)
-      channel.pipeline.fireUserInboundEventTriggered(streamClosed)
+      streamDelegate.streamClosed(streamID, channel: channel)
     }
 
     XCTAssertEqual(http2.streamsOpened, 4)
@@ -1133,7 +1292,7 @@ extension ConnectionManagerTests {
       return channelPromise.futureResult
     }
 
-    let multiplexer: EventLoopFuture<HTTP2StreamMultiplexer> = self.waitForStateChange(
+    let multiplexer: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer> = self.waitForStateChange(
       from: .idle,
       to: .connecting
     ) {
@@ -1159,10 +1318,8 @@ internal struct Change: Hashable, CustomStringConvertible {
   }
 }
 
-#if compiler(>=5.6)
 // Unchecked as all mutable state is modified from a serial queue.
 extension RecordingConnectivityDelegate: @unchecked Sendable {}
-#endif // compiler(>=5.6)
 
 internal class RecordingConnectivityDelegate: ConnectivityStateDelegate {
   private let serialQueue = DispatchQueue(label: "io.grpc.testing")

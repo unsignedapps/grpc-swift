@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
 import Foundation
 import GRPC
 import GRPCInteroperabilityTestModels
@@ -23,8 +22,8 @@ import NIOCore
 ///
 /// See: https://github.com/grpc/grpc/blob/master/doc/interop-test-descriptions.md#server
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-public class TestServiceAsyncProvider: Grpc_Testing_TestServiceAsyncProvider {
-  public var interceptors: Grpc_Testing_TestServiceServerInterceptorFactoryProtocol?
+public final class TestServiceAsyncProvider: Grpc_Testing_TestServiceAsyncProvider {
+  public let interceptors: Grpc_Testing_TestServiceServerInterceptorFactoryProtocol? = nil
 
   public init() {}
 
@@ -217,4 +216,3 @@ public class TestServiceAsyncProvider: Grpc_Testing_TestServiceAsyncProvider {
     )
   }
 }
-#endif // compiler(>=5.6)

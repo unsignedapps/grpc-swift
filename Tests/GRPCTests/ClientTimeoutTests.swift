@@ -164,14 +164,12 @@ class ClientTimeoutTests: GRPCTestCase {
   }
 }
 
-#if compiler(>=5.6)
 // Unchecked as it uses an 'EmbeddedChannel'.
 extension EmbeddedGRPCChannel: @unchecked Sendable {}
-#endif // compiler(>=5.6)
 
 private final class EmbeddedGRPCChannel: GRPCChannel {
   let embeddedChannel: EmbeddedChannel
-  let multiplexer: EventLoopFuture<HTTP2StreamMultiplexer>
+  let multiplexer: EventLoopFuture<NIOHTTP2Handler.StreamMultiplexer>
 
   let logger: Logger
   let scheme: String
@@ -197,8 +195,11 @@ private final class EmbeddedGRPCChannel: GRPCChannel {
       errorDelegate: errorDelegate,
       logger: logger
     ).flatMap {
-      embeddedChannel.pipeline.handler(type: HTTP2StreamMultiplexer.self)
+      embeddedChannel.pipeline.handler(type: NIOHTTP2Handler.self)
+    }.flatMap { h2Handler in
+      h2Handler.multiplexer
     }
+
     self.scheme = "http"
     self.authority = "localhost"
     self.errorDelegate = errorDelegate

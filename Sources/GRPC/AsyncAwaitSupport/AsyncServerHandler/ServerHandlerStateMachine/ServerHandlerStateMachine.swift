@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if compiler(>=5.6)
 import NIOHPACK
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -28,7 +27,7 @@ internal struct ServerHandlerStateMachine {
   }
 
   @inlinable
-  mutating func setResponseHeaders(_ headers: HPACKHeaders) {
+  mutating func setResponseHeaders(_ headers: HPACKHeaders) -> Bool {
     switch self.state {
     case var .handling(handling):
       let nextStateAndOutput = handling.setResponseHeaders(headers)
@@ -359,4 +358,3 @@ extension ServerHandlerStateMachine.Finished {
     }
   }
 }
-#endif // compiler(>=5.6)
