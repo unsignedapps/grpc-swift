@@ -189,10 +189,12 @@ extension Generator {
   }
 
   private func printClassBackedServiceClientImplementation() {
-    self.println("@available(*, deprecated)")
+    // The deprecation was suppressed to avoid excessive warnings while clients move away from it.
+    // self.println("@available(*, deprecated)")
     self.println("extension \(clientClassName): @unchecked Sendable {}")
     self.println()
-    self.println("@available(*, deprecated, renamed: \"\(clientStructName)\")")
+    // The deprecation was suppressed to avoid excessive warnings while clients move away from it.
+    // self.println("@available(*, deprecated, renamed: \"\(clientStructName)\")")
     println("\(access) final class \(clientClassName): \(clientProtocolName) {")
     self.withIndentation {
       println("private let lock = Lock()")
@@ -532,14 +534,16 @@ extension Generator {
   }
 
   private func printTestClient() {
-    self.println("@available(swift, deprecated: 5.6)")
+    // The deprecation was suppressed to avoid excessive warnings while clients move away from it.
+    // self.println("@available(swift, deprecated: 5.6)")
     self.println("extension \(self.testClientClassName): @unchecked Sendable {}")
     self.println()
-    self.println(
-      "@available(swift, deprecated: 5.6, message: \"Test clients are not Sendable "
-        + "but the 'GRPCClient' API requires clients to be Sendable. Using a localhost client and "
-        + "server is the recommended alternative.\")"
-    )
+    // The deprecation was suppressed to avoid excessive warnings while clients move away from it.
+    // self.println(
+    //   "@available(swift, deprecated: 5.6, message: \"Test clients are not Sendable "
+    //     + "but the 'GRPCClient' API requires clients to be Sendable. Using a localhost client and "
+    //     + "server is the recommended alternative.\")"
+    // )
     self.println(
       "\(self.access) final class \(self.testClientClassName): \(self.clientProtocolName) {"
     )
