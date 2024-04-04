@@ -24,10 +24,11 @@ import NIOCore
 import NIOPosix
 import NIOSSL
 import NIOTransportServices
+import GRPCSampleData
 import Security
 import XCTest
 
-@available(macOS 10.14, iOS 12.0, watchOS 6.0, tvOS 12.0, *)
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 final class GRPCNetworkFrameworkTests: GRPCTestCase {
   private var server: Server!
   private var client: ClientConnection!
@@ -38,9 +39,9 @@ final class GRPCNetworkFrameworkTests: GRPCTestCase {
   private let queue = DispatchQueue(label: "io.grpc.verify-handshake")
 
   private static let p12bundleURL = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent() // (this file)
-    .deletingLastPathComponent() // GRPCTests
-    .deletingLastPathComponent() // Tests
+    .deletingLastPathComponent()  // (this file)
+    .deletingLastPathComponent()  // GRPCTests
+    .deletingLastPathComponent()  // Tests
     .appendingPathComponent("Sources")
     .appendingPathComponent("GRPCSampleData")
     .appendingPathComponent("bundle")
@@ -106,7 +107,8 @@ final class GRPCNetworkFrameworkTests: GRPCTestCase {
   }
 
   private func startServer(_ builder: Server.Builder) throws {
-    self.server = try builder
+    self.server =
+      try builder
       .withServiceProviders([EchoProvider()])
       .withLogger(self.serverLogger)
       .bind(host: "127.0.0.1", port: 0)
@@ -114,7 +116,8 @@ final class GRPCNetworkFrameworkTests: GRPCTestCase {
   }
 
   private func startClient(_ builder: ClientConnection.Builder) {
-    self.client = builder
+    self.client =
+      builder
       .withBackgroundActivityLogger(self.clientLogger)
       .withConnectionReestablishment(enabled: false)
       .connect(host: "127.0.0.1", port: self.server.channel.localAddress!.port!)
@@ -206,7 +209,63 @@ final class GRPCNetworkFrameworkTests: GRPCTestCase {
 
     XCTAssertNoThrow(try self.doEchoGet())
   }
+
+  func testWaiterPicksUpNWError(
+    _ configure: (inout GRPCChannelPool.Configuration) -> Void
+  ) async throws {
+    let builder = Server.usingTLSBackedByNIOSSL(
+      on: self.group,
+      certificateChain: [SampleCertificate.server.certificate],
+      privateKey: SamplePrivateKey.server
+    )
+
+    let server = try await builder.bind(host: "127.0.0.1", port: 0).get()
+    defer { try? server.close().wait() }
+
+    let client = try GRPCChannelPool.with(
+      target: .hostAndPort("127.0.0.1", server.channel.localAddress!.port!),
+      transportSecurity: .tls(.makeClientConfigurationBackedByNetworkFramework()),
+      eventLoopGroup: self.tsGroup
+    ) {
+      configure(&$0)
+    }
+
+    let echo = Echo_EchoAsyncClient(channel: client)
+    do {
+      let _ = try await echo.get(.with { $0.text = "ignored" })
+    } catch let error as GRPCConnectionPoolError {
+      XCTAssertEqual(error.code, .deadlineExceeded)
+      XCTAssert(error.underlyingError is NWError)
+    } catch {
+      XCTFail("Expected GRPCConnectionPoolError")
+    }
+
+    let promise = self.group.next().makePromise(of: Void.self)
+    client.closeGracefully(deadline: .now() + .seconds(1), promise: promise)
+    try await promise.futureResult.get()
+  }
+
+  func testErrorPickedUpBeforeConnectTimeout() async throws {
+    try await self.testWaiterPicksUpNWError {
+      // Configure the wait time to be less than the connect timeout, the waiter
+      // should fail with the appropriate NWError before the connect times out.
+      $0.connectionPool.maxWaitTime = .milliseconds(500)
+      $0.connectionBackoff.minimumConnectionTimeout = 1.0
+    }
+  }
+
+  func testNotWaitingForConnectivity() async throws {
+    try await self.testWaiterPicksUpNWError {
+      // The minimum connect time is still high, but setting wait for activity to false
+      // means it fails on entering the waiting state rather than seeing out the connect
+      // timeout.
+      $0.connectionPool.maxWaitTime = .milliseconds(500)
+      $0.debugChannelInitializer = { channel in
+        channel.setOption(NIOTSChannelOptions.waitForActivity, value: false)
+      }
+    }
+  }
 }
 
-#endif // canImport(Network)
-#endif // canImport(NIOSSL)
+#endif  // canImport(Network)
+#endif  // canImport(NIOSSL)

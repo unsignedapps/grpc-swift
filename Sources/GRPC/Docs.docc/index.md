@@ -27,7 +27,9 @@ gRPC Swift Version | Earliest Swift Version
 `1.0.0 ..< 1.8.0`  | 5.2
 `1.8.0 ..< 1.11.0` | 5.4
 `1.11.0..< 1.16.0`.| 5.5
-`1.16.0...`        | 5.6
+`1.16.0..< 1.20.0` | 5.6
+`1.20.0..< 1.22.0` | 5.7
+`1.22.0...`        | 5.8
 
 Versions of clients and services which are use Swift's Concurrency support
 are available from gRPC Swift 1.8.0 and require Swift 5.6 and newer.
@@ -61,8 +63,14 @@ dependencies: [
 Binary releases of `protoc`, the Protocol Buffer Compiler, are available on
 [GitHub][protobuf-releases].
 
-To build the plugins, run `make plugins` in the main directory. This uses the
-Swift Package Manager to build both of the necessary plugins:
+To build the plugins, run the following in the main directory:
+
+```sh
+$ swift build --product protoc-gen-swift
+$ swift build --product protoc-gen-grpc-swift
+```
+
+This uses the Swift Package Manager to build both of the necessary plugins:
 `protoc-gen-swift`, which generates Protocol Buffer support code and
 `protoc-gen-grpc-swift`, which generates gRPC interface code.
 

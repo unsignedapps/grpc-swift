@@ -16,10 +16,11 @@
 import Logging
 import NIOCore
 import NIOHTTP2
+import SwiftProtobuf
+
 #if canImport(NIOSSL)
 import NIOSSL
 #endif
-import SwiftProtobuf
 
 @usableFromInline
 internal final class PooledChannel: GRPCChannel {
@@ -70,7 +71,7 @@ internal final class PooledChannel: GRPCChannel {
       // - Network.framework is not available
       // NIOSSL or Network.framework must be available as TLS is configured.
       fatalError()
-      #endif // canImport(NIOSSL)
+      #endif  // canImport(NIOSSL)
     } else {
       scheme = "http"
       tlsMode = .disabled
@@ -95,6 +96,7 @@ internal final class PooledChannel: GRPCChannel {
       perPoolConfiguration: .init(
         maxConnections: configuration.connectionPool.connectionsPerEventLoop,
         maxWaiters: configuration.connectionPool.maxWaitersPerEventLoop,
+        minConnections: configuration.connectionPool.minConnectionsPerEventLoop,
         loadThreshold: configuration.connectionPool.reservationLoadThreshold,
         assumedMaxConcurrentStreams: 100,
         connectionBackoff: configuration.connectionBackoff,

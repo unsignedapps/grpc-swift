@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@testable import GRPC
+
 import NIOCore
 import NIOEmbedded
 import NIOHPACK
 import XCTest
+
+@testable import GRPC
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 internal final class ServerHandlerStateMachineTests: GRPCTestCase {
@@ -263,6 +265,7 @@ internal final class ServerHandlerStateMachineTests: GRPCTestCase {
 
 // MARK: - Action Assertions
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension ServerHandlerStateMachine.HandleMetadataAction {
   func assertInvokeHandler() {
     XCTAssertEqual(self, .invokeHandler)
@@ -273,6 +276,7 @@ extension ServerHandlerStateMachine.HandleMetadataAction {
   }
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension ServerHandlerStateMachine.HandleMessageAction {
   func assertForward() {
     XCTAssertEqual(self, .forward)
@@ -283,6 +287,7 @@ extension ServerHandlerStateMachine.HandleMessageAction {
   }
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension ServerHandlerStateMachine.SendMessageAction {
   func assertInterceptHeadersThenMessage(_ verify: (HPACKHeaders) -> Void = { _ in }) {
     switch self {
@@ -302,6 +307,7 @@ extension ServerHandlerStateMachine.SendMessageAction {
   }
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension ServerHandlerStateMachine.SendStatusAction {
   func assertIntercept(_ verify: (HPACKHeaders) -> Void = { _ in }) {
     switch self {
@@ -317,6 +323,7 @@ extension ServerHandlerStateMachine.SendStatusAction {
   }
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension ServerHandlerStateMachine.CancelAction {
   func assertNone() {
     XCTAssertEqual(self, .none)

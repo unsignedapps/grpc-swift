@@ -13,12 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@testable import GRPC
+
 import NIOCore
 import NIOEmbedded
 import NIOHPACK
 import NIOPosix
 import XCTest
+
+@testable import GRPC
 
 // MARK: - Tests
 
@@ -520,18 +522,21 @@ class AsyncServerHandlerTests: GRPCTestCase {
   }
 }
 
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 internal final class AsyncResponseStream: GRPCServerResponseWriter {
-  private let source: NIOAsyncSequenceProducer<
-    GRPCServerResponsePart<ByteBuffer>,
-    NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
-    GRPCAsyncSequenceProducerDelegate
-  >.Source
+  private let source:
+    NIOAsyncSequenceProducer<
+      GRPCServerResponsePart<ByteBuffer>,
+      NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
+      GRPCAsyncSequenceProducerDelegate
+    >.Source
 
-  internal var responseSequence: NIOAsyncSequenceProducer<
-    GRPCServerResponsePart<ByteBuffer>,
-    NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
-    GRPCAsyncSequenceProducerDelegate
-  >
+  internal var responseSequence:
+    NIOAsyncSequenceProducer<
+      GRPCServerResponsePart<ByteBuffer>,
+      NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark,
+      GRPCAsyncSequenceProducerDelegate
+    >
 
   init() {
     let backpressureStrategy = NIOAsyncSequenceProducerBackPressureStrategies.HighLowWatermark(

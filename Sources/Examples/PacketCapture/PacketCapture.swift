@@ -21,7 +21,7 @@ import NIOExtras
 import NIOPosix
 
 @main
-@available(macOS 10.15, *)
+@available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 struct PCAP: AsyncParsableCommand {
   @Option(help: "The port to connect to")
   var port = 1234
@@ -56,9 +56,11 @@ struct PCAP: AsyncParsableCommand {
         // used TLS we would likely want to place the handler in a different position in the
         // pipeline so that the captured packets in the trace would not be encrypted.
         let writePCAPHandler = NIOWritePCAPHandler(mode: .client, fileSink: fileSink.write(buffer:))
-        return channel.eventLoop.makeCompletedFuture(Result {
-          try channel.pipeline.syncOperations.addHandler(writePCAPHandler, position: .first)
-        })
+        return channel.eventLoop.makeCompletedFuture(
+          Result {
+            try channel.pipeline.syncOperations.addHandler(writePCAPHandler, position: .first)
+          }
+        )
       }
     }
 

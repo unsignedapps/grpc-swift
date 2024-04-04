@@ -275,7 +275,15 @@ struct GRPCIdleHandlerStateMachine {
       operations.cancelIdleTask(state.idleTask)
 
     case var .quiescing(state):
-      state.lastPeerInitiatedStreamID = streamID
+      switch state.role {
+      case .client where streamID.isServerInitiated:
+        state.lastPeerInitiatedStreamID = streamID
+      case .server where streamID.isClientInitiated:
+        state.lastPeerInitiatedStreamID = streamID
+      default:
+        ()
+      }
+
       state.openStreams += 1
       self.state = .quiescing(state)
 
@@ -406,12 +414,12 @@ struct GRPCIdleHandlerStateMachine {
 
     switch self.state {
     case let .operating(state):
+      operations.notifyConnectionManager(about: .quiescing)
       if state.hasOpenStreams {
         // There are open streams: send a GOAWAY frame and wait for the stream count to reach zero.
         //
         // It's okay if we haven't seen a SETTINGS frame at this point; we've initiated the shutdown
         // so making a connection is ready isn't necessary.
-        operations.notifyConnectionManager(about: .quiescing)
 
         // TODO: we should ratchet down the last initiated stream after 1-RTT.
         //
@@ -467,8 +475,8 @@ struct GRPCIdleHandlerStateMachine {
       // A SETTINGS frame MUST follow the connection preface. (RFC 7540 § 3.5)
       assert(state.hasSeenSettings)
 
+      operations.notifyConnectionManager(about: .quiescing)
       if state.hasOpenStreams {
-        operations.notifyConnectionManager(about: .quiescing)
         switch state.role {
         case .client:
           // The server sent us a GOAWAY we'll just stop opening new streams and will send a GOAWAY
@@ -492,7 +500,9 @@ struct GRPCIdleHandlerStateMachine {
     case let .waitingToIdle(state):
       // There can't be any open streams, but we have a few loose ends to clear up: we need to
       // cancel the idle timeout, send a GOAWAY frame and then close.
+      // We should also notify the connection manager that quiescing is happening.
       self.state = .closing(.init(fromWaitingToIdle: state))
+      operations.notifyConnectionManager(about: .quiescing)
       operations.cancelIdleTask(state.idleTask)
       operations.sendGoAwayFrame(lastPeerInitiatedStreamID: state.lastPeerInitiatedStreamID)
       operations.closeChannel()
@@ -528,9 +538,12 @@ struct GRPCIdleHandlerStateMachine {
     // Log the change in settings.
     self.logger.debug(
       "HTTP2 settings update",
-      metadata: Dictionary(settings.map {
-        ("\($0.parameter.loggingMetadataKey)", "\($0.value)")
-      }, uniquingKeysWith: { a, _ in a })
+      metadata: Dictionary(
+        settings.map {
+          ("\($0.parameter.loggingMetadataKey)", "\($0.value)")
+        },
+        uniquingKeysWith: { a, _ in a }
+      )
     )
 
     var operations: Operations = .none
@@ -673,15 +686,21 @@ extension CanOpenStreams {
       ()
     }
 
-    logger.debug("HTTP2 stream created", metadata: [
-      MetadataKey.h2StreamID: "\(streamID)",
-      MetadataKey.h2ActiveStreams: "\(self.openStreams)",
-    ])
+    logger.debug(
+      "HTTP2 stream created",
+      metadata: [
+        MetadataKey.h2StreamID: "\(streamID)",
+        MetadataKey.h2ActiveStreams: "\(self.openStreams)",
+      ]
+    )
 
     if self.openStreams == self.maxConcurrentStreams {
-      logger.warning("HTTP2 max concurrent stream limit reached", metadata: [
-        MetadataKey.h2ActiveStreams: "\(self.openStreams)",
-      ])
+      logger.warning(
+        "HTTP2 max concurrent stream limit reached",
+        metadata: [
+          MetadataKey.h2ActiveStreams: "\(self.openStreams)"
+        ]
+      )
     }
   }
 }
@@ -695,9 +714,12 @@ extension CanCloseStreams {
   fileprivate mutating func streamClosed(_ streamID: HTTP2StreamID, logger: Logger) {
     self.openStreams -= 1
 
-    logger.debug("HTTP2 stream closed", metadata: [
-      MetadataKey.h2StreamID: "\(streamID)",
-      MetadataKey.h2ActiveStreams: "\(self.openStreams)",
-    ])
+    logger.debug(
+      "HTTP2 stream closed",
+      metadata: [
+        MetadataKey.h2StreamID: "\(streamID)",
+        MetadataKey.h2ActiveStreams: "\(self.openStreams)",
+      ]
+    )
   }
 }

@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-@testable import GRPC
+
 import NIOCore
 import NIOEmbedded
 import NIOHTTP2
 import XCTest
+
+@testable import GRPC
 
 class GRPCIdleHandlerStateMachineTests: GRPCTestCase {
   private func makeClientStateMachine() -> GRPCIdleHandlerStateMachine {
@@ -192,6 +194,7 @@ class GRPCIdleHandlerStateMachineTests: GRPCTestCase {
     op3.assertGoAway(streamID: .rootStream)
     op3.assertShouldClose()
     op3.assertCancelIdleTimeout()
+    op3.assertConnectionManager(.quiescing)
 
     // Close; we were going to go idle anyway.
     let op4 = stateMachine.channelInactive()
@@ -205,6 +208,7 @@ class GRPCIdleHandlerStateMachineTests: GRPCTestCase {
     let op1 = stateMachine.initiateGracefulShutdown()
     op1.assertGoAway(streamID: .rootStream)
     op1.assertShouldClose()
+    op1.assertConnectionManager(.quiescing)
 
     // Closed.
     let op2 = stateMachine.channelInactive()
@@ -221,6 +225,7 @@ class GRPCIdleHandlerStateMachineTests: GRPCTestCase {
     // Initiate shutdown.
     let op2 = stateMachine.initiateGracefulShutdown()
     op2.assertShouldNotClose()
+    op2.assertConnectionManager(.quiescing)
 
     // Receive a GOAWAY; no change.
     let op3 = stateMachine.receiveGoAway()
@@ -465,8 +470,9 @@ class GRPCIdleHandlerStateMachineTests: GRPCTestCase {
     let op5 = stateMachine.receiveGoAway()
     // We're the client, there are no server initiated streams, so GOAWAY with root stream.
     op5.assertGoAway(streamID: 0)
-    // No open streams, so we can close now.
+    // No open streams, so we can close now. Also assert the connection manager got a quiescing event.
     op5.assertShouldClose()
+    op5.assertConnectionManager(.quiescing)
 
     // Closed.
     let op6 = stateMachine.channelInactive()
@@ -493,6 +499,7 @@ class GRPCIdleHandlerStateMachineTests: GRPCTestCase {
     let op4 = stateMachine.receiveGoAway()
     op4.assertGoAway(streamID: .maxID)
     op4.assertShouldPingAfterGoAway()
+    op4.assertConnectionManager(.quiescing)
 
     // Create another stream. This is fine, the client hasn't ack'd the ping yet.
     let op5 = stateMachine.streamCreated(withID: 7)
@@ -532,6 +539,34 @@ class GRPCIdleHandlerStateMachineTests: GRPCTestCase {
     // move to 'closed'
     _ = stateMachine.channelInactive()
     stateMachine.ratchetDownGoAwayStreamID().assertDoNothing()
+  }
+
+  func testStreamIDWhenQuiescing() {
+    var stateMachine = self.makeClientStateMachine()
+    let op1 = stateMachine.receiveSettings([])
+    op1.assertConnectionManager(.ready)
+
+    // Open a stream so we enter quiescing when receiving the GOAWAY.
+    let op2 = stateMachine.streamCreated(withID: 1)
+    op2.assertDoNothing()
+
+    let op3 = stateMachine.receiveGoAway()
+    op3.assertConnectionManager(.quiescing)
+
+    // Create a new stream. This can happen if the GOAWAY races with opening the stream; HTTP2 will
+    // open and then close the stream with an error.
+    let op4 = stateMachine.streamCreated(withID: 3)
+    op4.assertDoNothing()
+
+    // Close the newly opened stream.
+    let op5 = stateMachine.streamClosed(withID: 3)
+    op5.assertDoNothing()
+
+    // Close the original stream.
+    let op6 = stateMachine.streamClosed(withID: 1)
+    // Now we can send a GOAWAY with stream ID zero (we're the client and the server didn't open
+    // any streams).
+    XCTAssertEqual(op6.sendGoAwayWithLastPeerInitiatedStreamID, 0)
   }
 }
 

@@ -165,14 +165,14 @@ public final class HTTP2ToRawGRPCServerCodec: ChannelInboundHandler, GRPCServerR
 
     // Ignored.
     case .alternativeService,
-         .goAway,
-         .origin,
-         .ping,
-         .priority,
-         .pushPromise,
-         .rstStream,
-         .settings,
-         .windowUpdate:
+      .goAway,
+      .origin,
+      .ping,
+      .priority,
+      .pushPromise,
+      .rstStream,
+      .settings,
+      .windowUpdate:
       ()
     }
   }
