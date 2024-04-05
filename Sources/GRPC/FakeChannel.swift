@@ -19,7 +19,8 @@ import NIOEmbedded
 import SwiftProtobuf
 
 // This type is deprecated, but we need to '@unchecked Sendable' to avoid warnings in our own code.
-@available(swift, deprecated: 5.6)
+// The deprecation was suppressed to avoid excessive warnings while clients move away from it.
+// @available(swift, deprecated: 5.6)
 extension FakeChannel: @unchecked Sendable {}
 
 /// A fake channel for use with generated test clients.
@@ -31,12 +32,16 @@ extension FakeChannel: @unchecked Sendable {}
 ///
 /// Users will typically not be required to interact with the channel directly, instead they should
 /// do so via a generated test client.
-@available(
-  swift,
-  deprecated: 5.6,
-  message:
-    "GRPCChannel implementations must be Sendable but this implementation is not. Using a client and server on localhost is the recommended alternative."
-)
+///
+/// This type is deprecated, but the deprecation was suppressed to avoid excessive warnings while
+/// clients move away from it.
+///
+/// @available(
+///   swift,
+///   deprecated: 5.6,
+///   message:
+///     "GRPCChannel implementations must be Sendable but this implementation is not. Using a client and server on localhost is the recommended alternative."
+/// )
 public class FakeChannel: GRPCChannel {
   /// Fake response streams keyed by their path.
   private var responseStreams: [String: CircularBuffer<Any>]
@@ -157,7 +162,8 @@ public class FakeChannel: GRPCChannel {
   }
 }
 
-@available(swift, deprecated: 5.6)
+// The deprecation was suppressed to avoid excessive warnings while clients move away from it.
+// @available(swift, deprecated: 5.6)
 extension FakeChannel {
   /// Dequeue a proxy for the given path and casts it to the given type, if one exists.
   private func dequeueResponseStream<Stream>(
