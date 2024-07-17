@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
+@_spi(Package) @testable import GRPCHTTP2Core
 import NIOCore
 import NIOEmbedded
 import NIOHTTP2
 import XCTest
-
-@testable import GRPCHTTP2Core
 
 final class ClientConnectionHandlerTests: XCTestCase {
   func testMaxIdleTime() throws {
@@ -70,8 +69,8 @@ final class ClientConnectionHandlerTests: XCTestCase {
     try connection.waitUntilClosed()
   }
 
-  func testKeepAliveWithOpenStreams() throws {
-    let connection = try Connection(keepAliveTime: .minutes(1), keepAliveTimeout: .seconds(10))
+  func testKeepaliveWithOpenStreams() throws {
+    let connection = try Connection(keepaliveTime: .minutes(1), keepaliveTimeout: .seconds(10))
     try connection.activate()
 
     // Open a stream so keep-alive starts.
@@ -96,8 +95,8 @@ final class ClientConnectionHandlerTests: XCTestCase {
     XCTAssertNil(try connection.readFrame())
   }
 
-  func testKeepAliveWithNoOpenStreams() throws {
-    let connection = try Connection(keepAliveTime: .minutes(1), allowKeepAliveWithoutCalls: true)
+  func testKeepaliveWithNoOpenStreams() throws {
+    let connection = try Connection(keepaliveTime: .minutes(1), allowKeepaliveWithoutCalls: true)
     try connection.activate()
 
     for _ in 0 ..< 10 {
@@ -114,8 +113,8 @@ final class ClientConnectionHandlerTests: XCTestCase {
     }
   }
 
-  func testKeepAliveWithOpenStreamsTimingOut() throws {
-    let connection = try Connection(keepAliveTime: .minutes(1), keepAliveTimeout: .seconds(10))
+  func testKeepaliveWithOpenStreamsTimingOut() throws {
+    let connection = try Connection(keepaliveTime: .minutes(1), keepaliveTimeout: .seconds(10))
     try connection.activate()
 
     // Open a stream so keep-alive starts.
@@ -135,7 +134,7 @@ final class ClientConnectionHandlerTests: XCTestCase {
     // - be closed
     connection.loop.advanceTime(by: .seconds(10))
 
-    XCTAssertEqual(try connection.readEvent(), .closing(.keepAliveExpired))
+    XCTAssertEqual(try connection.readEvent(), .closing(.keepaliveExpired))
 
     let frame2 = try XCTUnwrap(connection.readFrame())
     XCTAssertEqual(frame2.streamID, .rootStream)
@@ -195,6 +194,17 @@ final class ClientConnectionHandlerTests: XCTestCase {
     connection.streamClosed(3)
     try connection.waitUntilClosed()
   }
+
+  func testOutboundGracefulClose() throws {
+    let connection = try Connection()
+    try connection.activate()
+
+    connection.streamOpened(1)
+    let closed = connection.closeGracefully()
+    XCTAssertEqual(try connection.readEvent(), .closing(.initiatedLocally))
+    connection.streamClosed(1)
+    try closed.wait()
+  }
 }
 
 extension ClientConnectionHandlerTests {
@@ -206,17 +216,17 @@ extension ClientConnectionHandlerTests {
 
     init(
       maxIdleTime: TimeAmount? = nil,
-      keepAliveTime: TimeAmount? = nil,
-      keepAliveTimeout: TimeAmount? = nil,
-      allowKeepAliveWithoutCalls: Bool = false
+      keepaliveTime: TimeAmount? = nil,
+      keepaliveTimeout: TimeAmount? = nil,
+      allowKeepaliveWithoutCalls: Bool = false
     ) throws {
       let loop = EmbeddedEventLoop()
       let handler = ClientConnectionHandler(
         eventLoop: loop,
         maxIdleTime: maxIdleTime,
-        keepAliveTime: keepAliveTime,
-        keepAliveTimeout: keepAliveTimeout,
-        keepAliveWithoutCalls: allowKeepAliveWithoutCalls
+        keepaliveTime: keepaliveTime,
+        keepaliveTimeout: keepaliveTimeout,
+        keepaliveWithoutCalls: allowKeepaliveWithoutCalls
       )
 
       self.channel = EmbeddedChannel(handler: handler, loop: loop)
@@ -269,6 +279,13 @@ extension ClientConnectionHandlerTests {
     func waitUntilClosed() throws {
       self.channel.embeddedEventLoop.run()
       try self.channel.closeFuture.wait()
+    }
+
+    func closeGracefully() -> EventLoopFuture<Void> {
+      let promise = self.channel.embeddedEventLoop.makePromise(of: Void.self)
+      let event = ClientConnectionHandler.OutboundEvent.closeGracefully
+      self.channel.pipeline.triggerUserOutboundEvent(event, promise: promise)
+      return promise.futureResult
     }
   }
 }

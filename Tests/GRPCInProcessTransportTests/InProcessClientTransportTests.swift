@@ -111,7 +111,10 @@ final class InProcessClientTransportTests: XCTestCase {
 
     try await withThrowingTaskGroup(of: Void.self) { group in
       group.addTask {
-        try await client.withStream(descriptor: .init(service: "test", method: "test")) { _ in
+        try await client.withStream(
+          descriptor: .init(service: "test", method: "test"),
+          options: .defaults
+        ) { _ in
           // Once the pending stream is opened, close the client to new connections,
           // so that, once this closure is executed and this stream is closed,
           // the client will return from `connect(lazily:)`.
@@ -136,7 +139,10 @@ final class InProcessClientTransportTests: XCTestCase {
     client.close()
 
     await XCTAssertThrowsErrorAsync(ofType: RPCError.self) {
-      try await client.withStream(descriptor: .init(service: "test", method: "test")) { _ in }
+      try await client.withStream(
+        descriptor: .init(service: "test", method: "test"),
+        options: .defaults
+      ) { _ in }
     } errorHandler: { error in
       XCTAssertEqual(error.code, .failedPrecondition)
     }
@@ -152,7 +158,10 @@ final class InProcessClientTransportTests: XCTestCase {
       }
 
       group.addTask {
-        try await client.withStream(descriptor: .init(service: "test", method: "test")) { stream in
+        try await client.withStream(
+          descriptor: .init(service: "test", method: "test"),
+          options: .defaults
+        ) { stream in
           try await stream.outbound.write(.message([1]))
           stream.outbound.finish()
           let receivedMessages = try await stream.inbound.reduce(into: []) { $0.append($1) }
@@ -188,11 +197,11 @@ final class InProcessClientTransportTests: XCTestCase {
       nonFatalStatusCodes: []
     )
 
-    var serviceConfiguration = ServiceConfiguration(
-      methodConfiguration: [
-        MethodConfiguration(
+    var serviceConfig = ServiceConfig(
+      methodConfig: [
+        MethodConfig(
           names: [
-            MethodConfiguration.Name(service: "", method: "")
+            MethodConfig.Name(service: "", method: "")
           ],
           executionPolicy: .hedge(policy)
         )
@@ -201,13 +210,13 @@ final class InProcessClientTransportTests: XCTestCase {
 
     var client = InProcessClientTransport(
       server: InProcessServerTransport(),
-      serviceConfiguration: serviceConfiguration
+      serviceConfig: serviceConfig
     )
 
     let firstDescriptor = MethodDescriptor(service: "test", method: "first")
     XCTAssertEqual(
       client.configuration(forMethod: firstDescriptor),
-      serviceConfiguration.methodConfiguration.first
+      serviceConfig.methodConfig.first
     )
 
     let retryPolicy = RetryPolicy(
@@ -218,24 +227,24 @@ final class InProcessClientTransportTests: XCTestCase {
       retryableStatusCodes: [.unavailable]
     )
 
-    let overrideConfiguration = MethodConfiguration(
-      names: [MethodConfiguration.Name(service: "test", method: "second")],
+    let overrideConfiguration = MethodConfig(
+      names: [MethodConfig.Name(service: "test", method: "second")],
       executionPolicy: .retry(retryPolicy)
     )
-    serviceConfiguration.methodConfiguration.append(overrideConfiguration)
+    serviceConfig.methodConfig.append(overrideConfiguration)
     client = InProcessClientTransport(
       server: InProcessServerTransport(),
-      serviceConfiguration: serviceConfiguration
+      serviceConfig: serviceConfig
     )
 
     let secondDescriptor = MethodDescriptor(service: "test", method: "second")
     XCTAssertEqual(
       client.configuration(forMethod: firstDescriptor),
-      serviceConfiguration.methodConfiguration.first
+      serviceConfig.methodConfig.first
     )
     XCTAssertEqual(
       client.configuration(forMethod: secondDescriptor),
-      serviceConfiguration.methodConfiguration.last
+      serviceConfig.methodConfig.last
     )
   }
 
@@ -249,13 +258,19 @@ final class InProcessClientTransportTests: XCTestCase {
       }
 
       group.addTask {
-        try await client.withStream(descriptor: .init(service: "test", method: "test")) { stream in
+        try await client.withStream(
+          descriptor: .init(service: "test", method: "test"),
+          options: .defaults
+        ) { stream in
           try await Task.sleep(for: .milliseconds(100))
         }
       }
 
       group.addTask {
-        try await client.withStream(descriptor: .init(service: "test", method: "test")) { stream in
+        try await client.withStream(
+          descriptor: .init(service: "test", method: "test"),
+          options: .defaults
+        ) { stream in
           try await Task.sleep(for: .milliseconds(100))
         }
       }
@@ -280,10 +295,10 @@ final class InProcessClientTransportTests: XCTestCase {
       retryableStatusCodes: [.unavailable]
     )
 
-    let serviceConfiguration = ServiceConfiguration(
-      methodConfiguration: [
-        MethodConfiguration(
-          names: [MethodConfiguration.Name(service: "", method: "")],
+    let serviceConfig = ServiceConfig(
+      methodConfig: [
+        MethodConfig(
+          names: [MethodConfig.Name(service: "", method: "")],
           executionPolicy: .retry(defaultPolicy)
         )
       ]
@@ -291,7 +306,7 @@ final class InProcessClientTransportTests: XCTestCase {
 
     return InProcessClientTransport(
       server: server,
-      serviceConfiguration: serviceConfiguration
+      serviceConfig: serviceConfig
     )
   }
 }
