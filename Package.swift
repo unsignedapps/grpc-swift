@@ -39,12 +39,12 @@ let package = Package(
     // Official SwiftProtobuf library, for [de]serializing data to send on the wire.
     .package(
       name: "SwiftProtobuf",
-      url: "https://github.com/unsignedapps/swift-protobuf.git",
+      url: "https://github.com/apple/swift-protobuf.git",
       from: "1.9.1"
     ),
 
     // Logging API.
-    .package(url: "https://github.com/unsignedapps/swift-log.git", from: "1.4.3"),
+    .package(url: "https://github.com/apple/swift-log.git", from: "1.4.3"),
 
     // Argument parsing: only for internal targets (i.e. examples).
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.0.0"),
