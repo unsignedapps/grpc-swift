@@ -26,25 +26,25 @@ let package = Package(
   dependencies: [
     // GRPC dependencies:
     // Main SwiftNIO package
-    .package(url: "https://github.com/apple/swift-nio.git", from: "2.32.0"),
+    .package(url: "https://github.com/unsignedapps/swift-nio.git", from: "2.32.1"),
     // HTTP2 via SwiftNIO
-    .package(url: "https://github.com/apple/swift-nio-http2.git", from: "1.18.2"),
+    .package(url: "https://github.com/unsignedapps/swift-nio-http2.git", from: "1.18.4"),
     // TLS via SwiftNIO
-    .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.14.0"),
+    .package(url: "https://github.com/unsignedapps/swift-nio-ssl.git", from: "2.17.3"),
     // Support for Network.framework where possible.
-    .package(url: "https://github.com/apple/swift-nio-transport-services.git", from: "1.11.1"),
+    .package(url: "https://github.com/unsignedapps/swift-nio-transport-services.git", from: "1.11.5"),
     // Extra NIO stuff; quiescing helpers.
-    .package(url: "https://github.com/apple/swift-nio-extras.git", from: "1.4.0"),
+    .package(url: "https://github.com/unsignedapps/swift-nio-extras.git", from: "1.10.4"),
 
     // Official SwiftProtobuf library, for [de]serializing data to send on the wire.
     .package(
       name: "SwiftProtobuf",
-      url: "https://github.com/apple/swift-protobuf.git",
-      from: "1.9.0"
+      url: "https://github.com/unsignedapps/swift-protobuf.git",
+      from: "1.9.1"
     ),
 
     // Logging API.
-    .package(url: "https://github.com/apple/swift-log.git", from: "1.4.0"),
+    .package(url: "https://github.com/unsignedapps/swift-log.git", from: "1.4.3"),
 
     // Argument parsing: only for internal targets (i.e. examples).
     .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.0.0"),
